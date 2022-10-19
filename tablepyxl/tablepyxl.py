@@ -1,11 +1,13 @@
-# Do imports like python3 so our package works for 2 and 3
-from __future__ import absolute_import
-
 from lxml import html
 from openpyxl import Workbook
+from openpyxl.cell import MergedCell
+from openpyxl.cell.rich_text import CellRichText, TextBlock
+from openpyxl.cell.text import InlineFont
+from openpyxl.styles import Border, Side
 from openpyxl.utils import get_column_letter
 from premailer import Premailer
-from tablepyxl.style import Table
+
+from main.style import Table, get_side
 
 
 def string_to_int(s):
@@ -14,99 +16,151 @@ def string_to_int(s):
     return 0
 
 
-def get_Tables(doc):
+def get_tables(doc):
     tree = html.fromstring(doc)
     comments = tree.xpath('//comment()')
     for comment in comments:
         comment.drop_tag()
-    return [Table(table) for table in tree.xpath('//table')]
+    return [Table(table) for table in tree.xpath('//table') + tree.xpath('//TABLE')]
 
 
-def write_rows(worksheet, elem, row, column=1):
-    """
-    Writes every tr child element of elem to a row in the worksheet
+class TableToWorksheet:
+    def __init__(self, worksheet, table):
+        self.worksheet = worksheet
+        self.table = table
 
-    returns the next row after all rows are written
-    """
-    initial_column = column
-    for table_row in elem.rows:
-        for table_cell in table_row.cells:
-            colspan = string_to_int(table_cell.element.get("colspan", "1"))
-            rowspan = string_to_int(table_cell.element.get("rowspan", "1"))
-            if rowspan > 1 or colspan > 1:
-                worksheet.merge_cells(start_row=row, start_column=column,
-                                      end_row=row + rowspan - 1, end_column=column + colspan - 1)
-            cell = worksheet.cell(row=row, column=column)
-            cell.value = table_cell.value
+    def write_row(self, table_cell, row, column):
+        cell = self.worksheet.cell(row=row, column=column)
+
+        colspan = string_to_int(table_cell.element.get("colspan", "1"))
+        rowspan = string_to_int(table_cell.element.get("rowspan", "1"))
+
+        cell_arr = [len(i) for i in table_cell.value.split('\n')]
+        height_cell = int(len(cell_arr) * 15)
+        width_cell = max(cell_arr) + 2
+
+        while isinstance(cell, MergedCell):
+            width = max(
+                self.worksheet.column_dimensions[get_column_letter(column)].width or 0,
+                width_cell // colspan + 1
+            )
+            self.worksheet.column_dimensions[get_column_letter(column)].width = width
             table_cell.format(cell)
-            min_width = table_cell.get_dimension('min-width')
-            max_width = table_cell.get_dimension('max-width')
-            if colspan == 1:
-                # Initially, when iterating for the first time through the loop, the width of all the cells is None.
-                # As we start filling in contents, the initial width of the cell (which can be retrieved by:
-                # worksheet.column_dimensions[get_column_letter(column)].width) is equal to the width of the previous
-                # cell in the same column (i.e. width of A2 = width of A1)
-                width = max(worksheet.column_dimensions[get_column_letter(column)].width or 0, len(cell.value) + 2)
-                if max_width and width > max_width:
-                    width = max_width
-                elif min_width and width < min_width:
-                    width = min_width
-                worksheet.column_dimensions[get_column_letter(column)].width = width
-            column += colspan
+            column += 1
+            cell = self.worksheet.cell(row=row, column=column)
+
+        if rowspan > 1 or colspan > 1:
+            self.worksheet.merge_cells(start_row=row, start_column=column,
+                                       end_row=row + rowspan - 1, end_column=column + colspan - 1)
+
+        cell.value = table_cell.value
+        table_cell.format(cell)
+
+        width = max(self.worksheet.column_dimensions[get_column_letter(column)].width or 0, width_cell // colspan + 1)
+        self.worksheet.column_dimensions[get_column_letter(column)].width = width
+
+        self.worksheet.row_dimensions[row].height = max(self.worksheet.row_dimensions[row].height, height_cell)
+        return column
+
+    def write_rows(self, row, column=1):
+        elem = self.table.body
+
+        initial_row = row
+        initial_column = column
+
+        for i in range(1, len(elem.rows[0].cells) + 1):
+            self.worksheet.column_dimensions[get_column_letter(i)].width = 0
+
+        for i in range(1, len(elem.rows) + 1):
+            self.worksheet.row_dimensions[i].height = 15
+
+        for table_row in elem.rows:
+            column = initial_column
+            for table_cell in table_row.cells:
+                column = self.write_row(table_cell, row, column)
+                column += 1
+
+            row += 1
+
+        self.set_external_top_border(start_column=initial_column, end_column=column-1, row=initial_row)
+        self.set_external_bottom_border(start_column=initial_column, end_column=column-1, row=row-1)
+        self.set_external_left_border(start_row=initial_row, end_row=row-1, column=initial_column)
+        self.set_external_right_border(start_row=initial_row, end_row=row-1, column=column-1)
+
+        return row
+
+    def set_external_top_border(self, start_column, end_column, row):
+        top = get_side(self.table.style_dict, 'top')
+        if top['border_style'] or top['color']:
+            top = Side(**top)
+            for column in range(start_column, end_column + 1):
+                cell = self.worksheet.cell(row, column)
+                bottom = Side(**cell.border.bottom.__dict__)
+                left = Side(**cell.border.left.__dict__)
+                right = Side(**cell.border.right.__dict__)
+
+                cell.border = Border(left=left, right=right, top=top, bottom=bottom)
+
+    def set_external_bottom_border(self, start_column, end_column, row):
+        bottom = get_side(self.table.style_dict, 'bottom')
+        if bottom['border_style'] or bottom['color']:
+            bottom = Side(**bottom)
+            for column in range(start_column, end_column + 1):
+                cell = self.worksheet.cell(row, column)
+                top = Side(**cell.border.top.__dict__)
+                left = Side(**cell.border.left.__dict__)
+                right = Side(**cell.border.right.__dict__)
+
+                cell.border = Border(left=left, right=right, top=top, bottom=bottom)
+
+    def set_external_left_border(self, start_row, end_row, column):
+        left = get_side(self.table.style_dict, 'left')
+        if left['border_style'] or left['color']:
+            left = Side(**left)
+            for row in range(start_row, end_row + 1):
+                cell = self.worksheet.cell(row, column)
+                top = Side(**cell.border.top.__dict__)
+                bottom = Side(**cell.border.bottom.__dict__)
+                right = Side(**cell.border.right.__dict__)
+
+                cell.border = Border(left=left, right=right, top=top, bottom=bottom)
+
+    def set_external_right_border(self, start_row, end_row, column):
+        right = get_side(self.table.style_dict, 'right')
+        if right['border_style'] or right['color']:
+            right = Side(**right)
+            for row in range(start_row, end_row + 1):
+                cell = self.worksheet.cell(row, column)
+                top = Side(**cell.border.top.__dict__)
+                left = Side(**cell.border.left.__dict__)
+                bottom = Side(**cell.border.bottom.__dict__)
+
+                cell.border = Border(left=left, right=right, top=top, bottom=bottom)
+
+
+def tables_to_sheet(tables, wb):
+    worksheet = wb.create_sheet()
+    row, column = 1, 1
+    for table in tables:
+        table_to_worksheet = TableToWorksheet(worksheet, table)
+        # if table.head:
+        #     row = table_to_worksheet.write_rows(worksheet, table.style_dict, row, column)
+        if table.body:
+            row = table_to_worksheet.write_rows(row, column)
         row += 1
-        column = initial_column
-    return row
-
-
-def table_to_sheet(table, wb):
-    """
-    Takes a table and workbook and writes the table to a new sheet.
-    The sheet title will be the same as the table attribute name.
-    """
-    ws = wb.create_sheet(title=table.element.get('name'))
-    insert_table(table, ws, 1, 1)
 
 
 def document_to_workbook(doc, wb=None, base_url=None):
-    """
-    Takes a string representation of an html document and writes one sheet for
-    every table in the document.
-
-    The workbook is returned
-    """
     if not wb:
         wb = Workbook()
         wb.remove(wb.active)
 
     inline_styles_doc = Premailer(doc, base_url=base_url, remove_classes=False).transform()
-    tables = get_Tables(inline_styles_doc)
-
-    for table in tables:
-        table_to_sheet(table, wb)
-
+    tables = get_tables(inline_styles_doc)
+    tables_to_sheet(tables, wb)
     return wb
 
 
 def document_to_xl(doc, filename, base_url=None):
-    """
-    Takes a string representation of an html document and writes one sheet for
-    every table in the document. The workbook is written out to a file called filename
-    """
     wb = document_to_workbook(doc, base_url=base_url)
     wb.save(filename)
-
-
-def insert_table(table, worksheet, column, row):
-    if table.head:
-        row = write_rows(worksheet, table.head, row, column)
-    if table.body:
-        row = write_rows(worksheet, table.body, row, column)
-
-
-def insert_table_at_cell(table, cell):
-    """
-    Inserts a table at the location of an openpyxl Cell object.
-    """
-    ws = cell.parent
-    column, row = cell.column, cell.row
-    insert_table(table, ws, column, row)
