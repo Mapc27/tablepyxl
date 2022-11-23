@@ -1,12 +1,15 @@
 import re
 
+from lxml.html import HtmlElement
 from openpyxl.cell import cell as openpyxl_cell
+from openpyxl.cell.rich_text import TextBlock, CellRichText
+from openpyxl.cell.text import InlineFont, Text
 from openpyxl.styles import Font, Alignment, PatternFill, NamedStyle, Border, Side, Color
 from openpyxl.styles.colors import BLACK
 from openpyxl.styles.fills import FILL_SOLID
 from openpyxl.styles.numbers import FORMAT_CURRENCY_USD_SIMPLE, FORMAT_PERCENTAGE
 
-from main.exceptions import IntNotFoundException
+from tablepyxl.exceptions import IntNotFoundException
 
 FORMAT_DATE_MM_DD_YYYY = 'mm/dd/yyyy'
 
@@ -55,10 +58,23 @@ basic_color_names = {
 }
 
 
+def get_hex(color):
+    basic_color = basic_color_names.get(color)
+    color = basic_color if basic_color is not None else color
+
+    if hasattr(color, 'startswith') and color.startswith('#'):
+        color = color[1:]
+        if len(color) == 3:
+            color = ''.join(2 * c for c in color)
+    if not color:
+        color = None
+    return color
+
+
 def extract_first_int_from_str(string):
     try:
         return re.findall(r'\d+', string)[0]
-    except IndexError:
+    except (IndexError, TypeError):
         raise IntNotFoundException(f"Can't found int value from string = {string}")
 
 
@@ -93,7 +109,9 @@ def get_side(style_dict, name):
 
         width = style_dict.get('border-{}-width'.format(name))
         width = int(extract_first_int_from_str(width))
-        if width == 1:
+        if width == 0:
+            style = None
+        elif width == 1:
             style = 'thin'
         elif width == 2:
             style = 'medium'
@@ -122,9 +140,15 @@ def get_dimension(dimension):
 
 
 def style_dict_to_named_style(style_dict, number_format=None):
+    el = style_dict
+    parents = ''
+    while el.parent is not None:
+        parents += str(el.parent)
+        el = el.parent
+
     style_and_format_string = str({
         'style_dict': style_dict,
-        'parent': style_dict.parent,
+        'parent': parents,
         'number_format': number_format,
     })
     if style_and_format_string not in known_styles:
@@ -223,14 +247,7 @@ class StyleDict(dict):
     def get_color(self, k, d=None):
         color = self.get(k, d)
 
-        basic_color = basic_color_names.get(color)
-        color = basic_color if basic_color is not None else color
-
-        if hasattr(color, 'startswith') and color.startswith('#'):
-            color = color[1:]
-            if len(color) == 3:  # Premailers reduces colors like #00ff00 to #0f0, openpyxl doesn't like that
-                color = ''.join(2 * c for c in color)
-        return color
+        return get_hex(color)
 
     def convert_border(self):
         converter_dict = {
@@ -454,22 +471,56 @@ class TableCell(Element):
                 pass
 
     def element_to_string(self):
-        return re.sub('[ ]{2,}', ' ', self._element_to_string(self.cell).strip())
+        return self._element_to_string(self.cell)
+
+    @staticmethod
+    def extract_styles_from_font(font_tag):
+        style_dict = StyleDict(style_string_to_dict(font_tag.get('style', '')))
+
+        color = style_dict.get('color')
+        size = style_dict.get('font-size')
+
+        color = font_tag.attrib.get('color') if not color else color
+        size = font_tag.attrib.get('size') if not size else size
+
+        color = get_hex(color)
+        try:
+            size = extract_first_int_from_str(size)
+        except IntNotFoundException:
+            pass
+
+        return color, size
 
     def _element_to_string(self, el):
-        string = ''
+        text_blocks = CellRichText()
         for x in el.iterchildren():
-            if x.tag == 'font':
-                self.cell.attrib.update(x.attrib)
-            if x.tag == 'b':
-                if not self.cell.attrib.get('style'):
-                    self.cell.attrib['style'] = ''
-                self.cell.attrib['style'] += 'font-weight: 700;'
-            # тут сделать стили из 'font'
-            next_string = self._element_to_string(x)
-            string += next_string
+            child_text_blocks = self._element_to_string(x)
+            text_blocks += child_text_blocks
 
         text = el.text if el.text else ''
         tail = el.tail if el.tail else ''
-        res = text + string + tail
-        return res
+
+        text = text.strip() if text.isspace() else text
+        tail = tail.strip() if tail.isspace() else tail
+
+        font_style = InlineFont()
+        if el.tag == 'font':
+            color, size = self.extract_styles_from_font(el)
+            font_style = InlineFont(color=color, sz=size)
+        elif el.tag == 'b':
+            font_style = InlineFont(b=True)
+
+        result = CellRichText()
+
+        result.append(TextBlock(font=font_style, text=text))
+        for text_block in text_blocks:
+            if font_style.b and not text_block.font.b:
+                text_block.font.b = font_style.b if font_style.b and not text_block.font.b else text_block.font.b
+            elif font_style.color and not text_block.font.color:
+                text_block.font.color = font_style.color
+        result += text_blocks
+
+        if tail:
+            result.append(TextBlock(font=InlineFont(), text=tail))
+
+        return result
