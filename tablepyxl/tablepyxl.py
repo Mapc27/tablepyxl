@@ -162,5 +162,6 @@ def document_to_workbook(doc, wb=None, base_url=None):
 
 
 def document_to_xl(doc, filename, base_url=None):
+    doc = doc.replace('<br>', '\n').replace('<br />', '\n')
     wb = document_to_workbook(doc, base_url=base_url)
     wb.save(filename)
