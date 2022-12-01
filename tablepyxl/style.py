@@ -161,12 +161,12 @@ def style_dict_to_named_style(style_dict, number_format=None):
         )
 
         horizontal = style_dict.get('text-align', 'general')
-        vertical = style_dict.get('vertical-align', 'center')
+        vertical = style_dict.get('vertical-align', 'top')
         alignment = Alignment(
             horizontal=horizontal if horizontal in (
-                'right', 'justify', 'distributed', 'fill', 'centerContinuous', 'center', 'general', 'left') else None,
+                'right', 'justify', 'distributed', 'fill', 'centerContinuous', 'center', 'general', 'left') else 'left',
             vertical=vertical if vertical in (
-                'right', 'justify', 'distributed', 'fill', 'centerContinuous', 'center', 'general', 'left') else None,
+                'bottom', 'center', 'justify', 'top', 'distributed') else 'top',
             # wrap_text=style_dict.get('white-space', 'nowrap') == 'wrap',
             wrap_text=True,
             # indent=get_dimension(style_dict.get('padding')) or 0.0
@@ -424,6 +424,8 @@ class TableCell(Element):
 
     def __init__(self, cell, parent=None):
         self.cell = cell
+        print(cell.text)
+        print(cell.tail)
         self.value = self.element_to_string()
         super(TableCell, self).__init__(self.cell, parent=parent)
         self.number_format = self.get_number_format()
@@ -500,8 +502,8 @@ class TableCell(Element):
         text = el.text if el.text else ''
         tail = el.tail if el.tail else ''
 
-        text = text.strip() if text.isspace() else text
-        tail = tail.strip() if tail.isspace() else tail
+        text = re.sub(" +", " ", text)
+        tail = re.sub(" +", " ", tail)
 
         font_style = InlineFont()
         if el.tag == 'font':

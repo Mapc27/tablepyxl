@@ -34,10 +34,7 @@ class TableToWorksheet:
 
         colspan = string_to_int(table_cell.element.get("colspan", "1"))
         rowspan = string_to_int(table_cell.element.get("rowspan", "1"))
-        try:
-            table_cell.value[-1].text = table_cell.value[-1].text.replace('\n', '')
-        except IndexError:
-            pass
+
         cell_arr = [len(i) for i in str(table_cell.value).split('\n')]
         height_cell = int(len(cell_arr) * 15)
         width_cell = max(cell_arr) + 2
@@ -162,6 +159,6 @@ def document_to_workbook(doc, wb=None, base_url=None):
 
 
 def document_to_xl(doc, filename, base_url=None):
-    doc = doc.replace('<br>', '\n').replace('<br />', '\n')
+    doc = doc.replace('\n', "").replace('<br>', '\n').replace('<br />', '\n')
     wb = document_to_workbook(doc, base_url=base_url)
     wb.save(filename)
