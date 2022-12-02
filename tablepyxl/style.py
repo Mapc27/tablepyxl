@@ -424,8 +424,6 @@ class TableCell(Element):
 
     def __init__(self, cell, parent=None):
         self.cell = cell
-        print(cell.text)
-        print(cell.tail)
         self.value = self.element_to_string()
         super(TableCell, self).__init__(self.cell, parent=parent)
         self.number_format = self.get_number_format()
@@ -473,7 +471,10 @@ class TableCell(Element):
                 pass
 
     def element_to_string(self):
-        return self._element_to_string(self.cell)
+        rich_cell_text = self._element_to_string(self.cell)
+        if rich_cell_text[-1].text == '\n':
+            del rich_cell_text[-1]
+        return rich_cell_text
 
     @staticmethod
     def extract_styles_from_font(font_tag):
@@ -502,8 +503,8 @@ class TableCell(Element):
         text = el.text if el.text else ''
         tail = el.tail if el.tail else ''
 
-        text = re.sub(" +", " ", text)
-        tail = re.sub(" +", " ", tail)
+        text = text.strip("&nbsp; ")
+        tail = tail.strip("&nbsp; ")
 
         font_style = InlineFont()
         if el.tag == 'font':
